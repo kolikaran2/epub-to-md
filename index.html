@@ -1,0 +1,718 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en">
+<head>
+<title>EPUB to Markdown</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f5f2; --card:#ffffff; --ink:#1d1d1b; --muted:#6b6a66; --line:#e2e0da;
+    --accent:#2f5d50; --accent-ink:#ffffff; --soft:#eef3f1; --err:#a33a2b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#141514; --card:#1d1f1e; --ink:#ecebe7; --muted:#a3a29d; --line:#323533;
+      --accent:#7fc2ad; --accent-ink:#0f1a16; --soft:#1f2a26; --err:#ff8a78; }
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{ background:var(--bg); color:var(--ink);
+    font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Nirmala UI",sans-serif; }
+  .wrap{ max-width:860px; margin:0 auto; padding:24px 16px 48px; }
+  h1{ font-size:24px; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub{ color:var(--muted); margin:0 0 20px; font-size:14px; }
+  .drop{ display:block; border:2px dashed var(--line); border-radius:14px; background:var(--card);
+    padding:32px 16px; text-align:center; cursor:pointer; transition:border-color .15s, background .15s; }
+  .drop:hover,.drop.over{ border-color:var(--accent); background:var(--soft); }
+  .drop strong{ display:block; font-size:17px; margin-bottom:4px; }
+  .drop span{ color:var(--muted); font-size:13px; }
+  .drop input{ display:none; }
+  .opts{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 16px; margin:16px 0; }
+  .opts label{ display:flex; gap:10px; align-items:flex-start; padding:6px 0; font-size:14px; cursor:pointer; }
+  .opts input{ margin-top:3px; accent-color:var(--accent); }
+  .opts small{ color:var(--muted); display:block; }
+  .bar{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 12px; }
+  button{ font:inherit; font-size:14px; border:1px solid var(--line); background:var(--card); color:var(--ink);
+    padding:8px 14px; border-radius:9px; cursor:pointer; }
+  button:hover{ border-color:var(--accent); }
+  button.primary{ background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .file{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .file .name{ font-weight:600; word-break:break-word; }
+  .file .meta{ color:var(--muted); font-size:13px; margin:2px 0 8px; }
+  .file .err{ color:var(--err); font-size:13px; }
+  .file .btns{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .limit{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 0 10px; border-bottom:1px solid var(--line); margin-bottom:4px; font-size:14px; }
+  .limit input{ width:90px; font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
+  .limit small{ color:var(--muted); flex-basis:100%; }
+  .parts{ width:100%; border-collapse:collapse; font-size:13px; }
+  .parts td{ padding:6px 4px; border-top:1px solid var(--line); vertical-align:middle; }
+  .parts td.n{ word-break:break-all; }
+  .parts td.s{ white-space:nowrap; text-align:right; font-variant-numeric:tabular-nums; }
+  .parts td.a{ white-space:nowrap; text-align:right; }
+  .parts .ok{ color:var(--accent); font-weight:600; }
+  .parts .bad{ color:var(--err); font-weight:600; }
+  .parts .ch{ color:var(--muted); font-size:12px; display:block; }
+  .parts button{ padding:4px 9px; font-size:12px; }
+  .summary{ font-size:13px; margin:0 0 6px; }
+  textarea{ width:100%; min-height:420px; border:1px solid var(--line); border-radius:12px; background:var(--card);
+    color:var(--ink); padding:12px; font:13px/1.55 ui-monospace,Consolas,"Nirmala UI",monospace; resize:vertical; }
+  .hidden{ display:none; }
+  .note{ color:var(--muted); font-size:12px; margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EPUB → Markdown</h1>
+  <p class="sub">Converts .epub books to .md, split into parts of up to 240 KB each. Chapter names become main headings (#), the book's own headings are kept underneath them (##, ###…). Whole chapters are packed into each part; a chapter is only cut if it is bigger than the limit on its own. Works offline in your browser — files are never uploaded.</p>
+
+  <label class="drop" id="drop">
+    <strong>Tap to choose .epub files</strong>
+    <span>or drag and drop them here (several at once is fine)</span>
+    <input type="file" id="picker" accept=".epub,application/epub+zip" multiple>
+  </label>
+
+  <div class="opts">
+    <div class="limit">
+      <span>Max size per file</span>
+      <input type="number" id="optLimit" value="240" min="20" max="100000" step="10" inputmode="numeric"> KB
+      <small>Measured in UTF-8 bytes (1 KB = 1000 bytes; Hindi letters take 3 bytes each).</small>
+    </div>
+    <label><input type="checkbox" id="optNormalize" checked>
+      <span>Nest the book's headings under each chapter<small>Inner headings start at ## so only chapter names use #. Turn off to keep the original levels exactly.</small></span></label>
+    <label><input type="checkbox" id="optLinks" checked>
+      <span>Keep web links<small>Links to websites stay clickable; internal book links become plain text.</small></span></label>
+    <label><input type="checkbox" id="optImg">
+      <span>Show image descriptions<small>Adds *[Image: …]* where the book has an image with alt text.</small></span></label>
+    <label><input type="checkbox" id="optFront">
+      <span>Add title and author at the top<small>As YAML front matter (useful for Obsidian).</small></span></label>
+  </div>
+
+  <div class="bar hidden" id="allBar">
+    <button class="primary" id="dlAll">Download all books (.zip)</button>
+    <button id="reconvert">Re-convert with current options</button>
+  </div>
+  <div id="list"></div>
+
+  <div id="previewBox" class="hidden">
+    <div class="bar"><strong id="previewName" style="flex:1; word-break:break-all"></strong><button id="previewCopy">Copy</button></div>
+    <textarea id="preview" readonly spellcheck="false"></textarea>
+  </div>
+
+  <p class="note">Tip: if a chapter name appears twice or is missing, the EPUB's table of contents is unusual — try switching the first option off.</p>
+</div>
+
+<script>
+/* ---------- helpers ---------- */
+const OPS_NS = 'http://www.idpf.org/2007/ops';
+const DC_NS = 'http://purl.org/dc/elements/1.1/';
+const byTag = (root, n) => Array.from(root.getElementsByTagNameNS('*', n));
+const firstTag = (root, n) => root.getElementsByTagNameNS('*', n)[0] || null;
+const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+
+function parseXml(str){
+  const d = new DOMParser().parseFromString(str, 'application/xml');
+  return d.getElementsByTagName('parsererror').length ? null : d;
+}
+function parseDoc(str){
+  let d = new DOMParser().parseFromString(str, 'application/xhtml+xml');
+  if (d.getElementsByTagName('parsererror').length) d = new DOMParser().parseFromString(str, 'text/html');
+  return d;
+}
+const dirOf = p => { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i + 1); };
+function safeDecode(s){ try { return decodeURIComponent(s); } catch(e){ return s; } }
+function resolvePath(baseFile, href){
+  const h = href.indexOf('#');
+  const pathPart = h < 0 ? href : href.slice(0, h);
+  const frag = h < 0 ? '' : safeDecode(href.slice(h + 1));
+  let full = baseFile;
+  if (pathPart){
+    try { full = safeDecode(new URL(pathPart, 'http://x/' + dirOf(baseFile)).pathname.slice(1)); }
+    catch(e){ full = dirOf(baseFile) + pathPart; }
+  }
+  return { path: full, frag };
+}
+function getFile(zip, path){
+  let f = zip.file(path); if (f) return f;
+  const lower = path.toLowerCase();
+  const k = Object.keys(zip.files).find(n => n.toLowerCase() === lower || safeDecode(n).toLowerCase() === lower);
+  return k ? zip.file(k) : null;
+}
+const norm = s => (s || '').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]/gu, '');
+function sameTitle(a, b){ a = norm(a); b = norm(b); return !!a && !!b && (a === b || b.includes(a) || a.includes(b)); }
+const esc = t => t.replace(/([\\`*<])/g, '\\$1');
+const collapse = s => s.replace(/\n(?:[ \t]*\n){2,}/g, '\n\n');
+function wrap(s, m){
+  if (!s.trim()) return s;
+  const core = s.trim(); if (core.includes('\n\n')) return s;
+  return s.match(/^\s*/)[0] + m + core + m + s.match(/\s*$/)[0];
+}
+const epType = n => (n.getAttributeNS && n.getAttributeNS(OPS_NS, 'type')) || n.getAttribute('epub:type') || '';
+
+/* ---------- table of contents ---------- */
+async function readNav(zip, path){
+  const f = getFile(zip, path); if (!f) return [];
+  const doc = parseDoc(await f.async('string'));
+  const navs = byTag(doc, 'nav');
+  const nav = navs.find(n => epType(n).split(/\s+/).includes('toc')) || navs[0];
+  if (!nav) return [];
+  const ol = Array.from(nav.children).find(c => c.localName === 'ol') || firstTag(nav, 'ol');
+  if (!ol) return [];
+  const out = [];
+  (function walk(list, depth){
+    for (const li of Array.from(list.children)){
+      if (li.localName !== 'li') continue;
+      const a = Array.from(li.children).find(c => c.localName === 'a' || c.localName === 'span');
+      const title = clean(a ? a.textContent : '');
+      const href = a && a.localName === 'a' ? a.getAttribute('href') : null;
+      if (title && href){ const r = resolvePath(path, href); out.push({ title, path: r.path, frag: r.frag, depth }); }
+      const sub = Array.from(li.children).find(c => c.localName === 'ol');
+      if (sub) walk(sub, depth + 1);
+    }
+  })(ol, 1);
+  return out;
+}
+async function readNcx(zip, path){
+  const f = getFile(zip, path); if (!f) return [];
+  const doc = parseXml(await f.async('string')); if (!doc) return [];
+  const map = firstTag(doc, 'navMap'); if (!map) return [];
+  const out = [];
+  (function walk(parent, depth){
+    for (const np of Array.from(parent.children)){
+      if (np.localName !== 'navPoint') continue;
+      const label = Array.from(np.children).find(c => c.localName === 'navLabel');
+      const content = Array.from(np.children).find(c => c.localName === 'content');
+      const title = clean(label ? label.textContent : '');
+      const src = content ? content.getAttribute('src') : null;
+      if (title && src){ const r = resolvePath(path, src); out.push({ title, path: r.path, frag: r.frag, depth }); }
+      walk(np, depth + 1);
+    }
+  })(map, 1);
+  return out;
+}
+
+/* ---------- HTML → Markdown ---------- */
+const BLOCK = new Set(['p','div','section','article','header','footer','aside','main','nav','figure','figcaption','address','center','body','html','dl','hgroup']);
+const SKIP = new Set(['script','style','head','title','meta','link','svg','math','noscript','template','object','video','audio','iframe','button','input','select']);
+
+function chapterMarker(ctx, title){
+  ctx.pendingTitle = title; ctx.seenText = false;
+  return '\n\n\u0002' + esc(title) + '\u0002\n\n';
+}
+function kids(node, ctx){ let s = ''; for (const c of Array.from(node.childNodes)) s += nodeToMd(c, ctx); return s; }
+
+function nodeToMd(node, ctx){
+  if (node.nodeType === 3 || node.nodeType === 4){
+    const v = node.nodeValue;
+    if (ctx.pre) return v;
+    if (!ctx.inHeading && /\S/.test(v)) ctx.seenText = true;
+    return esc(v.replace(/\s+/g, ' '));
+  }
+  if (node.nodeType !== 1) return '';
+  const tag = (node.localName || '').toLowerCase();
+  if (SKIP.has(tag)) return '';
+  if (/pagebreak/.test(epType(node))) return '';
+  let prefix = '';
+  const id = node.getAttribute('id') || (tag === 'a' ? node.getAttribute('name') : null);
+  if (id && ctx.anchors.has(id)){ prefix = chapterMarker(ctx, ctx.anchors.get(id)); ctx.anchors.delete(id); }
+  return prefix + render(node, tag, ctx);
+}
+
+function render(node, tag, ctx){
+  if (/^h[1-6]$/.test(tag)) return heading(node, +tag[1], ctx);
+  switch (tag){
+    case 'br': return ctx.inHeading ? ' ' : '\u0003\n';
+    case 'hr': return '\n\n---\n\n';
+    case 'b': case 'strong': return wrap(kids(node, ctx), '**');
+    case 'i': case 'em': case 'cite': case 'dfn': return wrap(kids(node, ctx), '*');
+    case 's': case 'strike': case 'del': return wrap(kids(node, ctx), '~~');
+    case 'code': case 'kbd': case 'samp': case 'tt': {
+      if (ctx.pre) return kids(node, ctx);
+      const t = node.textContent.replace(/\s+/g, ' ');
+      if (!t.trim()) return t;
+      ctx.seenText = true;
+      const tick = t.includes('`') ? '``' : '`';
+      return tick + t + tick;
+    }
+    case 'pre': {
+      const t = node.textContent.replace(/^\n/, '').replace(/\s+$/, '');
+      if (!t) return '';
+      ctx.seenText = true;
+      return '\n\n```\n' + t + '\n```\n\n';
+    }
+    case 'blockquote': {
+      const inner = collapse(kids(node, ctx)).trim();
+      if (!inner) return '';
+      return '\n\n' + inner.split('\n').map(l => l.trim() ? '> ' + l : '>').join('\n') + '\n\n';
+    }
+    case 'ul': case 'ol': return list(node, tag === 'ol', ctx);
+    case 'li': { const t = kids(node, ctx).trim(); return t ? '\n\n' + t + '\n\n' : ''; }
+    case 'a': return link(node, ctx);
+    case 'img': case 'image': return image(node, ctx);
+    case 'table': return table(node, ctx);
+    case 'dt': { const t = kids(node, ctx).trim(); return t ? '\n\n' + wrap(t, '**') + '\n\n' : ''; }
+    case 'dd': { const t = kids(node, ctx).trim(); return t ? '\n\n' + t + '\n\n' : ''; }
+    default:
+      if (BLOCK.has(tag)){ const t = kids(node, ctx).trim(); return t ? '\n\n' + t + '\n\n' : ''; }
+      return kids(node, ctx);
+  }
+}
+
+function heading(node, level, ctx){
+  let pre = '';
+  for (const d of Array.from(node.getElementsByTagName('*'))){
+    const id = d.getAttribute('id') || d.getAttribute('name');
+    if (id && ctx.anchors.has(id)){ pre += chapterMarker(ctx, ctx.anchors.get(id)); ctx.anchors.delete(id); }
+  }
+  ctx.inHeading = true; let t = kids(node, ctx); ctx.inHeading = false;
+  t = t.replace(/[\s\u0003]+/g, ' ').trim();
+  if (!t) return pre;
+  if (ctx.pendingTitle && !ctx.seenText && sameTitle(t, ctx.pendingTitle)) return pre; // avoid repeating the chapter name
+  return pre + '\n\n\u0001H' + level + '\u0001' + t + '\n\n';
+}
+
+function list(node, ordered, ctx){
+  let n = parseInt(node.getAttribute('start'), 10); if (isNaN(n)) n = 1;
+  const out = [];
+  for (const child of Array.from(node.children)){
+    if (child.localName !== 'li'){
+      const c = collapse(nodeToMd(child, ctx)).trim();
+      if (c) out.push(c.split('\n').filter(l => l.trim()).map(l => '  ' + l).join('\n'));
+      continue;
+    }
+    const marker = ordered ? (n++) + '. ' : '- ';
+    const c = kids(child, ctx).split('\n').filter(l => l.trim());
+    if (!c.length) continue;
+    const pad = ' '.repeat(marker.length);
+    out.push(c.map((l, i) => i === 0 ? marker + l.trim() : pad + l).join('\n'));
+  }
+  return out.length ? '\n\n' + out.join('\n') + '\n\n' : '';
+}
+
+function link(node, ctx){
+  const t = kids(node, ctx);
+  if (!t.trim()) return t;
+  const href = (node.getAttribute('href') || node.getAttributeNS('http://www.w3.org/1999/xlink', 'href') || '').trim();
+  const isNote = /noteref/.test(epType(node)) || (node.parentNode && node.parentNode.localName === 'sup') || !!firstTag(node, 'sup');
+  const lead = t.match(/^\s*/)[0], trail = t.match(/\s*$/)[0], core = t.trim();
+  if (isNote && href.includes('#') && !/^\[.*\]$/.test(core)) return lead + '[' + core + ']' + trail;
+  if (ctx.opts.links && /^(https?:|mailto:)/i.test(href))
+    return lead + '[' + core + '](' + href.replace(/\s/g, '%20').replace(/\)/g, '%29') + ')' + trail;
+  return t;
+}
+
+function image(node, ctx){
+  if (!ctx.opts.imgAlt) return '';
+  const alt = clean(node.getAttribute('alt') || node.getAttribute('title') || '');
+  return alt ? '\n\n*[Image: ' + esc(alt) + ']*\n\n' : '';
+}
+
+function table(node, ctx){
+  const rows = [];
+  for (const tr of Array.from(node.getElementsByTagName('*'))){
+    if (tr.localName !== 'tr') continue;
+    let p = tr.parentNode; while (p && p.localName !== 'table') p = p.parentNode;
+    if (p !== node) continue;
+    const cells = [];
+    for (const c of Array.from(tr.children)){
+      if (c.localName !== 'td' && c.localName !== 'th') continue;
+      cells.push(collapse(kids(c, ctx)).replace(/\u0001H\d\u0001/g, '').replace(/\u0003/g, '')
+        .trim().replace(/\s*\n\s*/g, ' <br> ').replace(/\|/g, '\\|'));
+    }
+    if (cells.length) rows.push(cells);
+  }
+  if (!rows.length) return '';
+  const cols = Math.max(...rows.map(r => r.length));
+  if (cols === 1) return '\n\n' + rows.map(r => r[0]).filter(Boolean).join('\n\n') + '\n\n'; // layout table
+  rows.forEach(r => { while (r.length < cols) r.push(''); });
+  const line = r => '| ' + r.join(' | ') + ' |';
+  return '\n\n' + [line(rows[0]), '|' + ' --- |'.repeat(cols), ...rows.slice(1).map(line)].join('\n') + '\n\n';
+}
+
+function finalizeFile(md, opts, promoteFirst){
+  const levels = [];
+  md.replace(/\u0001H(\d)\u0001/g, (m, l) => { levels.push(+l); return m; });
+  let first = promoteFirst && levels.length > 0;
+  const rest = first ? levels.slice(1) : levels;
+  const min = rest.length ? Math.min(...rest) : 1;
+  let chapters = 0;
+  md = md.replace(/\u0001H(\d)\u0001/g, (m, l) => {
+    l = +l;
+    if (first){ first = false; chapters++; return '# '; }
+    return '#'.repeat(opts.normalize ? Math.min(6, l - min + 2) : l) + ' ';
+  });
+  md = md.replace(/\u0002([^\u0002]*)\u0002/g, (m, t) => { chapters++; return '# ' + t; });
+  return { md, chapters };
+}
+
+function tidy(s){
+  let inFence = false;
+  const out = s.replace(/\r/g, '').split('\n').map(l => {
+    if (/^\s*```/.test(l)){ inFence = !inFence; return l; }
+    if (inFence) return l;
+    l = l.replace(/[ \t]+$/, '');
+    if (/^ \S/.test(l)) l = l.slice(1);
+    return l;
+  });
+  s = out.join('\n').replace(/\u0003\n/g, '  \n').replace(/\u0003/g, '');
+  s = s.replace(/\n(?:[ \t]*\n){2,}/g, '\n\n');
+  return s.trim() + '\n';
+}
+
+/* ---------- EPUB → Markdown ---------- */
+async function convertEpub(data, opts){
+  const zip = await JSZip.loadAsync(data);
+  const containerF = getFile(zip, 'META-INF/container.xml');
+  let opfPath = null;
+  if (containerF){
+    const c = parseXml(await containerF.async('string'));
+    const rf = c && firstTag(c, 'rootfile');
+    opfPath = rf && rf.getAttribute('full-path');
+  }
+  if (!opfPath || !getFile(zip, opfPath)) opfPath = Object.keys(zip.files).find(k => /\.opf$/i.test(k));
+  if (!opfPath) throw new Error('This does not look like a valid EPUB (no package file found).');
+  const opf = parseXml(await getFile(zip, opfPath).async('string'));
+  if (!opf) throw new Error('Could not read the EPUB package file.');
+
+  const manifest = {}, items = [];
+  byTag(opf, 'item').forEach(it => {
+    const href = it.getAttribute('href'); if (!href) return;
+    const rec = { id: it.getAttribute('id'), path: resolvePath(opfPath, href).path,
+      type: it.getAttribute('media-type') || '', props: it.getAttribute('properties') || '' };
+    manifest[rec.id] = rec; items.push(rec);
+  });
+  const spineEl = firstTag(opf, 'spine');
+  const spine = byTag(opf, 'itemref').map(r => manifest[r.getAttribute('idref')])
+    .filter(x => x && (/html/i.test(x.type) || /\.x?html?$/i.test(x.path)));
+
+  const title = clean((opf.getElementsByTagNameNS(DC_NS, 'title')[0] || {}).textContent);
+  const author = Array.from(opf.getElementsByTagNameNS(DC_NS, 'creator')).map(e => clean(e.textContent)).filter(Boolean).join(', ');
+
+  let toc = [];
+  const navItem = items.find(i => /(^|\s)nav(\s|$)/.test(i.props));
+  if (navItem) toc = await readNav(zip, navItem.path);
+  if (!toc.length){
+    const ncx = (spineEl && manifest[spineEl.getAttribute('toc')]) || items.find(i => /ncx/i.test(i.type) || /\.ncx$/i.test(i.path));
+    if (ncx) toc = await readNcx(zip, ncx.path);
+  }
+  const byFile = new Map();
+  toc.forEach(e => { if (!byFile.has(e.path)) byFile.set(e.path, []); byFile.get(e.path).push(e); });
+
+  const parts = []; let chapters = 0;
+  for (const item of spine){
+    if (navItem && item.path === navItem.path) continue; // skip the TOC page itself
+    const f = getFile(zip, item.path); if (!f) continue;
+    const doc = parseDoc(await f.async('string'));
+    const body = firstTag(doc, 'body') || doc.documentElement;
+    if (!body) continue;
+
+    const ids = new Set();
+    for (const e of Array.from(doc.getElementsByTagName('*'))){
+      const i = e.getAttribute('id'); if (i) ids.add(i);
+      const nm = e.getAttribute('name'); if (nm) ids.add(nm);
+    }
+    const entries = byFile.get(item.path) || [];
+    let startTitle = null; const anchors = new Map();
+    if (entries.length){
+      const fragless = entries.find(e => !e.frag);
+      const baseDepth = fragless ? fragless.depth : Math.min(...entries.map(e => e.depth));
+      if (fragless) startTitle = fragless.title;
+      for (const e of entries){
+        if (e === fragless || !e.frag || e.depth > baseDepth || anchors.has(e.frag)) continue;
+        if (ids.has(e.frag)) anchors.set(e.frag, e.title);
+        else if (!startTitle) startTitle = e.title;
+      }
+    }
+    const promoteFirst = !startTitle && anchors.size === 0 && (chapters === 0 || !toc.length);
+    const ctx = { opts, anchors, pendingTitle: startTitle, seenText: false, inHeading: false, pre: false };
+    const content = nodeToMd(body, ctx);
+    if (!content.replace(/[\u0001-\u0003]/g, '').trim() && (!startTitle || /^cover/i.test(startTitle))) continue;
+    const raw = (startTitle ? '\n\n\u0002' + esc(startTitle) + '\u0002\n\n' : '') + content;
+    const res = finalizeFile(raw, opts, promoteFirst);
+    chapters += res.chapters;
+    parts.push(res.md);
+  }
+
+  const md = tidy(parts.join('\n\n'));
+  const yaml = opts.front ? '---\ntitle: ' + JSON.stringify(title) + '\nauthor: ' + JSON.stringify(author) + '\n---\n\n' : '';
+  const words = (md.match(/\S+/g) || []).length;
+  return { md, yaml, title, author, chapters, words };
+}
+
+/* ---------- Splitting into parts (sizes measured in UTF-8 bytes) ---------- */
+const ENC = new TextEncoder();
+const bytes = s => ENC.encode(s).length;
+const isFence = l => /^\s*```/.test(l);
+const plainTitle = t => t.replace(/\\([\\`*<])/g, '$1').replace(/\*\*|~~/g, '').trim();
+
+// Break the book into chapters: each starts at a "# " heading (outside code blocks).
+function chapterUnits(md){
+  const units = []; let cur = null, fence = false; const pre = [];
+  for (const l of md.split('\n')){
+    if (isFence(l)){ fence = !fence; (cur ? cur.lines : pre).push(l); continue; }
+    if (!fence && /^# /.test(l)){
+      if (cur) units.push(cur);
+      else if (pre.join('').trim()) units.push({ title: 'Opening pages', heading: null, lines: pre.slice() });
+      cur = { title: plainTitle(l.slice(2)), heading: l.slice(2), lines: [l] };
+      continue;
+    }
+    (cur ? cur.lines : pre).push(l);
+  }
+  if (cur) units.push(cur);
+  else if (pre.join('').trim()) units.push({ title: 'Opening pages', heading: null, lines: pre });
+  return units.map(u => ({ title: u.title, heading: u.heading, text: u.lines.join('\n').trim() }));
+}
+
+// Paragraph blocks = text between blank lines (code blocks and tables are never broken).
+function blocksOf(text){
+  const out = []; let buf = [], fence = false;
+  for (const l of text.split('\n')){
+    if (isFence(l)) fence = !fence;
+    if (!fence && !l.trim()){ if (buf.length){ out.push(buf.join('\n')); buf = []; } continue; }
+    buf.push(l);
+  }
+  if (buf.length) out.push(buf.join('\n'));
+  const merged = []; let carry = '';             // keep a heading attached to the paragraph after it
+  for (const b of out){
+    if (/^#{1,6} /.test(b) && !b.includes('\n')) carry += (carry ? '\n\n' : '') + b;
+    else { merged.push(carry ? carry + '\n\n' + b : b); carry = ''; }
+  }
+  if (carry) merged.push(carry);
+  return merged;
+}
+
+function packStrings(items, budget, sep, firstBudget){
+  const sb = bytes(sep), out = []; let cur = null, cb = 0;
+  for (const it of items){
+    const n = bytes(it);
+    const cap = out.length === 0 && firstBudget != null ? firstBudget : budget;
+    if (cur !== null && cb + sb + n <= cap){ cur += sep + it; cb += sb + n; }
+    else { if (cur !== null) out.push(cur); cur = it; cb = n; }
+  }
+  if (cur !== null) out.push(cur);
+  return out;
+}
+function hardSplit(s, budget){
+  const out = []; let cur = '', cb = 0;
+  for (const ch of s){ const n = bytes(ch); if (cb + n > budget && cur){ out.push(cur); cur = ''; cb = 0; } cur += ch; cb += n; }
+  if (cur) out.push(cur);
+  return out;
+}
+// Only used when one single paragraph is bigger than the limit: split at sentence ends, then lines.
+function fitPieces(b, budget){
+  if (bytes(b) <= budget) return [b];
+  const lines = b.split('\n');
+  if (isFence(lines[0]) && lines.length > 2 && isFence(lines[lines.length - 1])){
+    const open = lines[0], inner = lines.slice(1, -1);
+    const room = budget - bytes(open) - 8;
+    return packStrings(inner.flatMap(l => fitPieces(l, room)), room, '\n').map(c => open + '\n' + c + '\n```');
+  }
+  const sents = b.replace(/([.!?।॥]+["'”’)\]]*)(\s+)/g, '$1$2\u0000').split('\u0000').filter(Boolean);
+  if (sents.length > 1) return packStrings(sents.flatMap(s => fitPieces(s, budget)), budget, '').map(x => x.trim()).filter(Boolean);
+  if (lines.length > 1) return packStrings(lines.flatMap(l => fitPieces(l, budget)), budget, '\n');
+  return hardSplit(b, budget);
+}
+
+// A chapter bigger than the budget is cut at the nearest paragraph break before the limit.
+// firstSpace (optional) = space left in the current file, so the chapter can start there.
+function splitChapter(u, budget, firstSpace){
+  const labelRoom = u.heading ? bytes('# ' + u.heading + ' (part 9999 of 9999)\n\n') : 40;
+  const room = budget - labelRoom;
+  const blocks = blocksOf(u.text).flatMap(b => fitPieces(b, room));
+  let firstRoom = firstSpace != null ? firstSpace - labelRoom : null;
+  if (firstRoom != null && (!blocks.length || bytes(blocks[0]) > firstRoom)) return null;
+  const pieces = packStrings(blocks, room, '\n\n', firstRoom);
+  if (pieces.length < 2) return [u];
+  const n = pieces.length;
+  return pieces.map((p, i) => {
+    const tag = ' (part ' + (i + 1) + ' of ' + n + ')';
+    let text = p;
+    if (u.heading){
+      const h = '# ' + u.heading + tag;
+      text = (i === 0 && p.startsWith('# ' + u.heading)) ? h + p.slice(('# ' + u.heading).length) : h + '\n\n' + p;
+    }
+    return { title: u.title + tag, heading: null, text };
+  });
+}
+
+function safeName(s){
+  const n = (s || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '').trim().replace(/\s+/g, '_').replace(/_+/g, '_').slice(0, 80);
+  return n || 'Book';
+}
+const kb = n => (n / 1000).toFixed(1) + ' KB';   // 1 KB = 1000 bytes, so the 240 KB limit = 240,000 bytes
+
+function splitBook(r, limitBytes, fallbackName){
+  const base = safeName(r.title || fallbackName);
+  const bookLine = 'Book: ' + (r.title || fallbackName) + (r.author ? ' by ' + r.author : '');
+  const units = chapterUnits(r.md);
+  let reserve = 700 + bytes(r.yaml);
+  for (let attempt = 0; attempt < 12; attempt++){
+    const budget = limitBytes - reserve;
+    if (budget < 2000) throw new Error('The size limit is too small.');
+    const groups = []; let cur = null, cb = 0;
+    const add = u => {                            // pack as many whole chapters as fit into each file
+      const n = bytes(u.text);
+      if (cur && cb + 2 + n <= budget){ cur.push(u); cb += 2 + n; }
+      else { cur = [u]; groups.push(cur); cb = n; }
+    };
+    for (const u of units){
+      const n = bytes(u.text);
+      if ((cur && cb + 2 + n <= budget) || n <= budget){ add(u); continue; }
+      // Chapter too big for any file: start it in the space left in the current file
+      // (if a useful amount is left), then continue it in fresh files.
+      const left = cur ? budget - cb - 2 : 0;
+      let pieces = left >= budget * 0.15 ? splitChapter(u, budget, left) : null;
+      if (!pieces) pieces = splitChapter(u, budget);
+      pieces.forEach(add);
+    }
+    const total = groups.length, pad = Math.max(2, String(total).length);
+    const parts = groups.map((g, i) => {
+      const name = base + '_Part' + String(i + 1).padStart(pad, '0') + '.md';
+      const first = g[0].title, last = g[g.length - 1].title;
+      const header = bookLine + '  \nPart: ' + (i + 1) + ' of ' + total + '  \nContains: ' +
+        (g.length === 1 ? first : first + ' to ' + last) + '\n\n---\n\n';
+      const content = r.yaml + header + g.map(u => u.text).join('\n\n') + '\n';
+      return { name, content, size: bytes(content), titles: g.map(u => u.title) };
+    });
+    const over = Math.max(...parts.map(p => p.size - limitBytes));
+    if (over > 0){ reserve += over + 256; continue; }
+
+    let idx = r.yaml + '# ' + esc(r.title || fallbackName) + ' — Index\n\n' + bookLine + '  \nTotal parts: ' + total +
+      '  \nSize limit per file: ' + kb(limitBytes) + ' (' + limitBytes.toLocaleString() + ' bytes)\n\n---\n';
+    parts.forEach((p, i) => {
+      idx += '\n## Part ' + (i + 1) + ' of ' + total + ': [' + p.name + '](' + encodeURI(p.name) + ') — ' + kb(p.size) + '\n\n' +
+        p.titles.map(t => '- ' + esc(t)).join('\n') + '\n';
+    });
+    const index = { name: base + '_00_Index.md', content: idx, size: bytes(idx), titles: [] };
+    const files = [index, ...parts];
+    console.table(files.map(f => ({ file: f.name, KB: +(f.size / 1000).toFixed(1), bytes: f.size, ok: f.size <= limitBytes })));
+    return { base, files, parts: total, chapters: units.length };
+  }
+  throw new Error('Could not fit the parts under the size limit.');
+}
+
+/* ---------- UI ---------- */
+function initUI(){
+  const picker = document.getElementById('picker');
+  if (!picker) return;
+  const drop = document.getElementById('drop');
+  const listEl = document.getElementById('list');
+  const allBar = document.getElementById('allBar');
+  const preview = document.getElementById('preview');
+  const previewBox = document.getElementById('previewBox');
+  const previewName = document.getElementById('previewName');
+  let jobs = [], previewText = '';
+
+  const getOpts = () => ({
+    normalize: document.getElementById('optNormalize').checked,
+    links: document.getElementById('optLinks').checked,
+    imgAlt: document.getElementById('optImg').checked,
+    front: document.getElementById('optFront').checked,
+  });
+  const getLimit = () => {
+    const v = parseFloat(document.getElementById('optLimit').value);
+    return Math.round((isFinite(v) && v >= 20 ? v : 240) * 1000);
+  };
+  const stem = n => n.replace(/\.epub$/i, '');
+
+  function download(name, blob){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }
+  const mdBlob = t => new Blob([t], { type: 'text/markdown;charset=utf-8' });
+  async function copy(text, btn){
+    try { await navigator.clipboard.writeText(text); }
+    catch(e){ preview.value = text; preview.select(); document.execCommand('copy'); }
+    const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = o, 1500);
+  }
+  function showPreview(f){
+    previewBox.classList.remove('hidden');
+    previewName.textContent = f.name + ' — ' + kb(f.size);
+    preview.value = previewText = f.content;
+    previewBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  document.getElementById('previewCopy').onclick = e => copy(previewText, e.target);
+
+  function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  function renderList(){
+    listEl.innerHTML = '';
+    jobs.forEach(job => {
+      const card = el('div', 'file');
+      card.appendChild(el('div', 'name', job.file.name));
+      if (job.error){ card.appendChild(el('div', 'err', job.error)); listEl.appendChild(card); return; }
+      if (!job.split){ card.appendChild(el('div', 'meta', 'Converting…')); listEl.appendChild(card); return; }
+      const r = job.result, sp = job.split;
+      card.appendChild(el('div', 'meta', [r.title, r.author].filter(Boolean).join(' — ') + (r.title || r.author ? ' · ' : '') +
+        sp.chapters + ' chapters · ' + r.words.toLocaleString() + ' words'));
+
+      const allOk = sp.files.every(f => f.size <= job.limit);
+      card.appendChild(el('p', 'summary', sp.parts + ' part file' + (sp.parts > 1 ? 's' : '') + ' + 1 index file. ' +
+        (allOk ? '✓ All files are within ' + kb(job.limit) + '.' : '⚠ Some files are over the limit.')));
+
+      const btns = el('div', 'btns');
+      const dz = el('button', 'primary', 'Download all files (.zip)');
+      dz.onclick = async () => {
+        const z = new JSZip(); sp.files.forEach(f => z.file(f.name, f.content));
+        download(sp.base + '.zip', await z.generateAsync({ type: 'blob' }));
+      };
+      btns.appendChild(dz); card.appendChild(btns);
+
+      const table = el('table', 'parts');
+      sp.files.forEach(f => {
+        const tr = document.createElement('tr');
+        const n = el('td', 'n'); n.appendChild(document.createTextNode(f.name));
+        if (f.titles.length) n.appendChild(el('span', 'ch', f.titles.length === 1 ? f.titles[0] : f.titles[0] + ' → ' + f.titles[f.titles.length - 1]));
+        const s = el('td', 's'); s.appendChild(document.createTextNode(kb(f.size) + ' '));
+        s.appendChild(el('span', f.size <= job.limit ? 'ok' : 'bad', f.size <= job.limit ? '✓' : '✗'));
+        const a = el('td', 'a');
+        const pv = el('button', null, 'View'); pv.onclick = () => showPreview(f);
+        const dl = el('button', null, 'Save'); dl.onclick = () => download(f.name, mdBlob(f.content));
+        a.append(pv, ' ', dl);
+        tr.append(n, s, a); table.appendChild(tr);
+      });
+      card.appendChild(table);
+      listEl.appendChild(card);
+    });
+    allBar.classList.toggle('hidden', !jobs.length);
+    document.getElementById('dlAll').classList.toggle('hidden', jobs.filter(j => j.split).length < 2);
+  }
+
+  async function run(job){
+    job.result = null; job.split = null; job.error = null; renderList();
+    try {
+      job.limit = getLimit();
+      job.result = await convertEpub(await job.file.arrayBuffer(), getOpts());
+      job.split = splitBook(job.result, job.limit, stem(job.file.name));
+    } catch(e){ job.error = 'Could not convert: ' + (e && e.message ? e.message : e); }
+    renderList();
+  }
+  async function addFiles(files){
+    if (!window.JSZip){ alert('The ZIP library could not load. Open this page once while connected to the internet.'); return; }
+    const fresh = Array.from(files).filter(f => /\.epub$/i.test(f.name)).map(file => ({ file }));
+    if (!fresh.length){ alert('Please choose .epub files.'); return; }
+    jobs = jobs.concat(fresh);
+    for (const j of fresh) await run(j);
+  }
+
+  picker.addEventListener('change', e => { addFiles(e.target.files); picker.value = ''; });
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => addFiles(e.dataTransfer.files));
+
+  document.getElementById('reconvert').onclick = async () => { previewBox.classList.add('hidden'); for (const j of jobs) await run(j); };
+  document.getElementById('dlAll').onclick = async () => {
+    const z = new JSZip(); const used = new Set();
+    jobs.filter(j => j.split).forEach(j => {
+      let folder = j.split.base, k = 2;
+      while (used.has(folder)) folder = j.split.base + ' (' + (k++) + ')';
+      used.add(folder);
+      j.split.files.forEach(f => z.file(folder + '/' + f.name, f.content));
+    });
+    download('epub-markdown.zip', await z.generateAsync({ type: 'blob' }));
+  };
+}
+initUI();
+</script>
+</body>
+</html>
